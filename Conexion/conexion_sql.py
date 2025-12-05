@@ -32,7 +32,7 @@ class ConexionSQL:
             self.db_estado = True
             logger.info("Conexión SQL Server establecida")
         except Exception as e:
-            logger.error(f"❌ Error al conectar a SQL Server: {e}")
+            logger.error(f"Error al conectar a SQL Server: {e}")
             self.db_estado = False
 
     def valida_conexion(self):
@@ -40,22 +40,22 @@ class ConexionSQL:
 
     def ejecutar(self, query: str):
         if not self.valida_conexion():
-            logger.warning("⚠️ Intento de ejecutar query sin conexión válida")
+            logger.warning("Intento de ejecutar query sin conexion valida")
             return None
         try:
             self.cursor.execute(query)
             self.conexion.commit()
-            logger.info(f"Query ejecutada en SQL Server: {query[:50]}...")  # Solo primeros 50 chars
+            logger.info(f"Query ejecutada en SQL Server: {query[:50]}...")
             return self.cursor
         except Exception as e:
-            logger.error(f"❌ Error ejecutando query SQL: {e}")
+            logger.error(f"Error ejecutando query SQL: {e}")
             return None
 
     def obtener_todos(self):
         try:
             return self.cursor.fetchall()
         except Exception as e:
-            logger.error(f"❌ Error al obtener resultados: {e}")
+            logger.error(f"Error al obtener resultados: {e}")
             return []
 
     def cerrar_conexion(self):

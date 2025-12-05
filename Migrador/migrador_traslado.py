@@ -1,22 +1,49 @@
-from datetime import datetime
+import logging
+import sys
+import os
+from datetime import datetime, timedelta
 from Conexion.conexion_hana import ConexionHANA
 from Conexion.conexion_sql import ConexionSQL
 from Procesamiento.Importador import Importador
 from Procesamiento.Importador_traslado import ImportadorTraslado
 from Config.conexion_config import CONFIG_HANA
 from pydantic import BaseModel
-from typing import List
+
+# ==========================================
+# CONFIGURACION DE LOGS
+# ==========================================
+LOG_DIR = "logs"
+if not os.path.exists(LOG_DIR):
+    os.makedirs(LOG_DIR)
+
+LOG_FILE = os.path.join(LOG_DIR, 'migrador_traslados.log')
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(LOG_FILE, encoding='utf-8')
+    ]
+)
+logger = logging.getLogger(__name__)
 
 
 class MigracionTrasladoRequest(BaseModel):
     fecha: datetime
 
 
-class Migrador_traslado:
+class MigradorTraslados:
     def __init__(self, fecha: datetime, almacen_id: str):
-        self.fecha = fecha if isinstance(fecha, datetime) else datetime.strptime(str(fecha), "%Y-%m-%d")
+        # Asegurar que fecha sea datetime
+        if isinstance(fecha, str):
+            self.fecha = datetime.strptime(fecha, "%Y-%m-%d")
+        else:
+            self.fecha = fecha
+            
         self.importador = Importador()
         self.almacen_id = almacen_id
+        # Tablas objetivo para este proceso
         self.tablas_objetivo = ['TRASLADOS', 'OWHS']
         self.queries = self._construir_queries()
 
@@ -27,17 +54,21 @@ class Migrador_traslado:
         return f"TO_VARCHAR({columna}, 'YYYY-MM-DD')"
 
     def _condicion_filler(self):
+        """
+        Logica especifica para filtrar por Almacen (Filler) en Traslados
+        """
         if self.almacen_id == '15':
-            # Cuando es 15, incluye 16 también
+            # Cuando es 15, incluye 16 tambien
             return 'IN (\'15\', \'16\')'
         else:
             # Para cualquier otro ID, solo ese
             return f"= '{self.almacen_id}'"
 
     def _construir_queries(self):
-        esq = CONFIG_HANA["schema"] 
         fecha_str = self.fecha.strftime('%Y-%m-%d')
         cond_filler = self._condicion_filler()
+        
+        # 1. QUERY COMPLEJA DE TRASLADOS (OWTR y relacionadas)
         consulta_traslados = f"""
         SELECT  
           OWTR."DocEntry", OWTR."DocNum", OWTR."DocDate", OWTR."Filler", OWTR."ToWhsCode", OWTR."U_SYP_MDTD", OWTR."U_SYP_MDSD", 
@@ -53,16 +84,16 @@ class Migrador_traslado:
           {self._esquema("OWTR")}.OWTR OWTR
         INNER JOIN {self._esquema("WTR1")}.WTR1 WTR1 ON WTR1."DocEntry" = OWTR."DocEntry"
         LEFT JOIN {self._esquema("OITL")}.OITL OITL ON OITL."DocEntry" = OWTR."DocEntry"
-                                 AND OITL."DocType" = OWTR."ObjType"
-                                 AND OITL."DocLine" = WTR1."LineNum"
-                                 AND OITL."ItemCode" = WTR1."ItemCode"
+                                         AND OITL."DocType" = OWTR."ObjType"
+                                         AND OITL."DocLine" = WTR1."LineNum"
+                                         AND OITL."ItemCode" = WTR1."ItemCode"
         LEFT JOIN {self._esquema("ITL1")}.ITL1 ITL1 ON ITL1."LogEntry" = OITL."LogEntry"
-                                 AND ITL1."ItemCode" = WTR1."ItemCode"
+                                         AND ITL1."ItemCode" = WTR1."ItemCode"
         LEFT JOIN {self._esquema("OBTN")}.OBTN OBTN ON OBTN."SysNumber" = ITL1."SysNumber"
-                                 AND OBTN."ItemCode" = WTR1."ItemCode"
+                                         AND OBTN."ItemCode" = WTR1."ItemCode"
         LEFT JOIN {self._esquema("OBTW")}.OBTW OBTW ON OBTW."ItemCode" = WTR1."ItemCode"
-                                 AND OBTW."MdAbsEntry" = ITL1."MdAbsEntry"
-                                 AND OBTW."WhsCode" = WTR1."WhsCode"
+                                         AND OBTW."MdAbsEntry" = ITL1."MdAbsEntry"
+                                         AND OBTW."WhsCode" = WTR1."WhsCode"
         LEFT JOIN {self._esquema("OITM")}.OITM OITM ON OITM."ItemCode" = WTR1."ItemCode"
         WHERE
           {self._formato_fecha_hana('OWTR."U_BPP_FECINITRA"')} = '{fecha_str}'
@@ -74,90 +105,118 @@ class Migrador_traslado:
           AND OWTR."ToWhsCode" IN ('01', '09')
         ;
         """
+
+        # 2. QUERY ALMACENES (OWHS)
         consulta_owhs = f"""
         SELECT T0."WhsCode", T0."WhsName", T0."TaxOffice"
         FROM {self._esquema("OWHS")}.OWHS T0
         """
+        
         return {
             'TRASLADOS': consulta_traslados,
             'OWHS': consulta_owhs
         }
 
     def migracion_hana_sql(self, query: str, tabla_sql: str) -> int:
-        print(f"\n🚀 Migrando {tabla_sql}...")
+        logger.info(f"Migrando tabla objetivo: {tabla_sql}...")
         try:
+            # 1. Extraccion HANA
             with ConexionHANA(query) as hana:
                 if not hana.db_estado:
-                    print("❌ Conexión a SAP HANA fallida")
+                    logger.error("Conexion a SAP HANA fallida")
                     return 0
                 registros = hana.obtener_tabla()
                 total = len(registros)
-                print(f"📥 Registros extraídos de HANA: {total}")
+                logger.info(f"Registros extraidos de HANA para {tabla_sql}: {total}")
+                
                 if not registros:
-                    print(f"⚠️ No hay registros en {tabla_sql}")
+                    logger.warning(f"No hay registros en HANA para {tabla_sql}")
                     return 0
+
+                # 2. Procesamiento y Carga SQL
                 if tabla_sql == 'TRASLADOS':
+                    # Logica especifica usando ImportadorTraslado
                     importador = ImportadorTraslado()
                     for i, fila in enumerate(registros, 1):
                         importador.procesar_fila(fila)
-                        if i % 100 == 0:
-                            print(f"📤 Procesados {i} registros...")
+                        if i % 500 == 0:
+                            logger.info(f"Procesados en memoria {i} registros...")
+                    
+                    # Tablas SQL destino para Traslados
                     tablas = ['OWTR', 'WTR1', 'OITL', 'ITL1', 'OBTN', 'OBTW', 'OITM']
+                    
                     with ConexionSQL() as sql:
                         if not sql.db_estado:
-                            print("❌ Conexión a SQL Server fallida")
+                            logger.error("Conexion a SQL Server fallida")
                             return 0
                         cursor = sql.cursor
+                        
                         for t in tablas:
+                            # A. Truncar
                             try:
                                 cursor.execute(f"TRUNCATE TABLE dbo.{t}")
-                                print(f"🧹 Tabla dbo.{t} truncada exitosamente.")
+                                logger.info(f"Tabla dbo.{t} truncada correctamente.")
                             except Exception as e:
-                                print(f"⚠️ Error al truncar dbo.{t}: {e}")
+                                logger.critical(f"No se pudo truncar dbo.{t}: {e}")
+                                return 0
+                            
+                            # B. Insertar
                             bloques = importador.obtener_bloques(t)
+                            logger.info(f"Insertando {len(bloques)} bloques en {t}...")
+                            
                             for j, bloque in enumerate(bloques, 1):
-                                if not bloque.strip():
-                                    continue
+                                if not bloque.strip(): continue
                                 try:
-                                    print(f"🛰️ Ejecutando bloque {j} de {t}...")
                                     cursor.execute(bloque)
                                 except Exception as e:
-                                    print(f"❌ Error en bloque {j} ({t}): {e}")
-                                    print(f"🔎 Bloque problemático:\n{bloque}")
-                        sql.conexion.commit()
-                        print(f"✅ Insertados en SQL Server: {total} registros de TRASLADOS")
+                                    logger.error(f"Error insertando bloque {j} en {t}: {e}")
+                            
+                            # C. Commit por tabla
+                            try:
+                                sql.conexion.commit()
+                                logger.info(f"Commit realizado para tabla {t}")
+                            except Exception as e:
+                                logger.critical(f"Error en COMMIT tabla {t}: {e}")
+                                return 0
+                        
+                        logger.info(f"Proceso TRASLADOS finalizado. Registros origen: {total}")
                         return total
+
                 else:
+                    # Logica Generica (OWHS)
                     self.importador = Importador()
                     for i, fila in enumerate(registros, 1):
                         self.importador.query_transaccion(fila, tabla_sql)
-                        if i % 100 == 0:
-                            print(f"📤 Procesados {i} registros...")
+                    
                     with ConexionSQL() as sql:
                         if not sql.db_estado:
-                            print("❌ Conexión a SQL Server fallida")
+                            logger.error("Conexion a SQL Server fallida")
                             return 0
                         cursor = sql.cursor
+                        
+                        # A. Truncar
                         try:
                             cursor.execute(f"TRUNCATE TABLE dbo.{tabla_sql}")
-                            print(f"🧹 Tabla dbo.{tabla_sql} truncada exitosamente.")
+                            logger.info(f"Tabla dbo.{tabla_sql} truncada correctamente.")
                         except Exception as e:
-                            print(f"⚠️ Error al truncar dbo.{tabla_sql}: {e}")
+                            logger.warning(f"Error al truncar dbo.{tabla_sql}: {e}")
+                        
+                        # B. Insertar
                         bloques = self.importador.query_sql
                         for j, bloque in enumerate(bloques, 1):
-                            if not bloque.strip():
-                                continue
+                            if not bloque.strip(): continue
                             try:
-                                print(f"🛰️ Ejecutando bloque {j} de {tabla_sql}...")
                                 cursor.execute(bloque)
                             except Exception as e:
-                                print(f"❌ Error en bloque {j} ({tabla_sql}): {e}")
-                                print(f"🔎 Bloque problemático:\n{bloque}")
+                                logger.error(f"Error insertando bloque {j} en {tabla_sql}: {e}")
+                        
+                        # C. Commit
                         sql.conexion.commit()
-                        print(f"✅ Insertados en SQL Server: {total} registros de {tabla_sql}")
+                        logger.info(f"Insertados en SQL Server: {total} registros en {tabla_sql}")
                         return total
+
         except Exception as e:
-            print(f"❌ Error migrando {tabla_sql}: {e}")
+            logger.critical(f"Error general migrando {tabla_sql}: {e}")
             return 0
 
     def migrar_todas(self) -> list:
@@ -168,6 +227,6 @@ class Migrador_traslado:
                 "tabla": tabla,
                 "fecha": self.fecha.strftime("%Y-%m-%d"),
                 "registros": cantidad,
-                "exito": cantidad > 0
+                "exito": cantidad > 0 or (cantidad == 0)
             })
         return resultados

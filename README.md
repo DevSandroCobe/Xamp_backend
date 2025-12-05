@@ -26,7 +26,7 @@ Este backend automatiza la migración de datos desde SAP (HANA/SQL Server) y la 
 
 ---
 
-## ⚡ Instalación rápida
+## Instalacion rapida
 
 1. **Clona el repositorio y entra al backend:**
 	```bash

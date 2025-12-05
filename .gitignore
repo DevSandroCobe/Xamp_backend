@@ -9,3 +9,5 @@ ActaDespacho_ventas/
 env/
 logs/
 *.log
+Logs/
+Temp_Downloads/

@@ -6,3 +6,4 @@ fastapi
 pydantic
 uvicorn[standard]
 tqdm
+dotenv

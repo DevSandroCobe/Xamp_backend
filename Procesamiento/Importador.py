@@ -190,6 +190,6 @@ class Importador:
                 ])
 
         except IndexError as e:
-            print(f"❌ ERROR en {tabla}: índice fuera de rango en reg_hana → {e}")
+            print(f"ERROR en {tabla}: indice fuera de rango en reg_hana - {e}")
         except Exception as e:
-            print(f"❌ ERROR inesperado en {tabla}: {e}")
+            print(f"ERROR inesperado en {tabla}: {e}")

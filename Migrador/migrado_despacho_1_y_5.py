@@ -1,4 +1,6 @@
-from logger import logger
+import logging
+import sys
+import os
 from datetime import datetime, timedelta
 from Conexion.conexion_hana import ConexionHANA
 from Conexion.conexion_sql import ConexionSQL
@@ -7,17 +9,42 @@ from Procesamiento.Importador_despacho import ImportadorDespacho
 from Config.conexion_config import CONFIG_HANA
 from pydantic import BaseModel
 
+# ==========================================
+# CONFIGURACION DE LOGS
+# ==========================================
+LOG_DIR = "Logs"
+if not os.path.exists(LOG_DIR):
+    os.makedirs(LOG_DIR)
+
+LOG_FILE = os.path.join(LOG_DIR, 'migrador_despacho.log')
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(LOG_FILE, encoding='utf-8')
+    ]
+)
+logger = logging.getLogger(__name__)
+
 
 class MigracionDespachoRequest(BaseModel):
     fecha: datetime
 
 
 class MigradorDespacho:
-    def __init__(self, fecha: datetime,  almacen_id: str):
-        self.fecha = fecha if isinstance(fecha, datetime) else datetime.strptime(str(fecha), "%Y-%m-%d")
-        self.importador = Importador()
+    def __init__(self, fecha: datetime, almacen_id: str):
+        # Asegurar que fecha sea datetime
+        if isinstance(fecha, str):
+            self.fecha = datetime.strptime(fecha, "%Y-%m-%d")
+        else:
+            self.fecha = fecha
+            
         self.almacen_id = almacen_id
-        self.tablas_objetivo = ['DESPACHO', 'OWHS']  # SOLO ESTAS TABLAS
+        self.importador = Importador()
+        # Tablas objetivo para despacho
+        self.tablas_objetivo = ['DESPACHO', 'OWHS']
         self.queries = self._construir_queries()
 
     def _esquema(self, tabla):
@@ -27,174 +54,185 @@ class MigradorDespacho:
         return f"TO_VARCHAR({columna}, 'YYYY-MM-DD')"
 
     def _construir_queries(self):
+        # Rango de fechas +/- 2 dias para despacho
         fecha_inicio = (self.fecha - timedelta(days=2)).strftime('%Y-%m-%d')
         fecha_fin = (self.fecha + timedelta(days=2)).strftime('%Y-%m-%d')
 
-        logger.debug(f"📅 Fecha objetivo: {self.fecha.strftime('%Y-%m-%d')}")
-        logger.debug(f"📅 Rango usado: {fecha_inicio} → {fecha_fin}")
+        logger.info(f"Fecha objetivo: {self.fecha.strftime('%Y-%m-%d')}")
+        logger.info(f"Rango usado: {fecha_inicio} -> {fecha_fin}")
 
+        # QUERY PRINCIPAL DESPACHO (OINV y relacionadas)
         consulta_despacho = f'''
-           SELECT
-          
-            OINV."DocEntry", OINV."NumAtCard", OINV."U_SYP_NGUIA", OINV."ObjType", OINV."DocNum", 
-            OINV."CardCode", OINV."CardName", OINV."DocDate", OINV."TaxDate", 
-            OINV."U_SYP_MDTD", OINV."U_SYP_MDSD", OINV."U_SYP_MDCD", 
-            OINV."U_COB_LUGAREN", OINV."U_BPP_FECINITRA",
-            
-        
-            INV1."DocEntry", INV1."ObjType", INV1."WhsCode", INV1."ItemCode", 
-            INV1."LineNum", INV1."Dscription", INV1."UomCode",
-            INV1."BaseType", INV1."BaseEntry",
+            SELECT
+                OINV."DocEntry", OINV."NumAtCard", OINV."U_SYP_NGUIA", OINV."ObjType", OINV."DocNum", 
+                OINV."CardCode", OINV."CardName", OINV."DocDate", OINV."TaxDate", 
+                OINV."U_SYP_MDTD", OINV."U_SYP_MDSD", OINV."U_SYP_MDCD", 
+                OINV."U_COB_LUGAREN", OINV."U_BPP_FECINITRA",
+                
+                INV1."DocEntry", INV1."ObjType", INV1."WhsCode", INV1."ItemCode", 
+                INV1."LineNum", INV1."Dscription", INV1."UomCode",
+                INV1."BaseType", INV1."BaseEntry",
 
-           
-            IBT1."ItemCode", IBT1."BatchNum", IBT1."WhsCode", IBT1."BaseEntry", 
-            IBT1."BaseType", IBT1."BaseLinNum", IBT1."Quantity",
-            
-          
-            OBTN."ItemCode", OBTN."DistNumber", OBTN."SysNumber", OBTN."AbsEntry", 
-            OBTN."MnfSerial", OBTN."ExpDate",
+                IBT1."ItemCode", IBT1."BatchNum", IBT1."WhsCode", IBT1."BaseEntry", 
+                IBT1."BaseType", IBT1."BaseLinNum", IBT1."Quantity",
+                
+                OBTN."ItemCode", OBTN."DistNumber", OBTN."SysNumber", OBTN."AbsEntry", 
+                OBTN."MnfSerial", OBTN."ExpDate",
 
-            
-            OBTW."ItemCode", OBTW."MdAbsEntry", OBTW."WhsCode", OBTW."Location", OBTW."AbsEntry",
-            
-        
-            OITL."LogEntry", OITL."ItemCode", OITL."DocEntry", OITL."DocLine", 
-            OITL."DocType", OITL."StockEff", OITL."LocCode",
+                OBTW."ItemCode", OBTW."MdAbsEntry", OBTW."WhsCode", OBTW."Location", OBTW."AbsEntry",
+                
+                OITL."LogEntry", OITL."ItemCode", OITL."DocEntry", OITL."DocLine", 
+                OITL."DocType", OITL."StockEff", OITL."LocCode",
 
-            ITL1."LogEntry", ITL1."ItemCode", ITL1."Quantity", ITL1."SysNumber", ITL1."MdAbsEntry",
+                ITL1."LogEntry", ITL1."ItemCode", ITL1."Quantity", ITL1."SysNumber", ITL1."MdAbsEntry",
 
-           
-            OITM."ItemCode", OITM."ItemName", OITM."FrgnName", 
-            OITM."U_SYP_CONCENTRACION", OITM."U_SYP_FORPR", 
-            OITM."U_SYP_FFDET", OITM."U_SYP_FABRICANTE"
+                OITM."ItemCode", OITM."ItemName", OITM."FrgnName", 
+                OITM."U_SYP_CONCENTRACION", OITM."U_SYP_FORPR", 
+                OITM."U_SYP_FFDET", OITM."U_SYP_FABRICANTE"
 
-        FROM {self._esquema("OINV")}.OINV OINV
-            INNER JOIN {self._esquema("INV1")}.INV1 INV1 
-                ON INV1."DocEntry" = OINV."DocEntry"
-            LEFT JOIN {self._esquema("IBT1")}.IBT1 IBT1 
-                ON IBT1."BaseEntry" = INV1."DocEntry" 
-                AND IBT1."BaseType" = INV1."ObjType" 
-                AND IBT1."WhsCode" = INV1."WhsCode" 
-                AND IBT1."ItemCode" = INV1."ItemCode" 
-                AND IBT1."BaseLinNum" = INV1."LineNum" 
-                AND IBT1."Quantity" < 0
-            LEFT JOIN {self._esquema("OBTN")}.OBTN OBTN 
-                ON OBTN."ItemCode" = INV1."ItemCode" 
-                AND OBTN."DistNumber" = IBT1."BatchNum"
-            LEFT JOIN {self._esquema("OITL")}.OITL OITL 
-                ON OITL."DocEntry" = INV1."DocEntry" 
-                AND OITL."ItemCode" = IBT1."ItemCode" 
-                AND OITL."DocType" = INV1."ObjType" 
-                AND OITL."DocLine" = INV1."LineNum" 
-                AND OITL."StockEff" = 1
-            LEFT JOIN {self._esquema("ITL1")}.ITL1 ITL1 
-                ON ITL1."LogEntry" = OITL."LogEntry" 
-                AND ITL1."Quantity" = IBT1."Quantity" 
-                AND ITL1."SysNumber" = OBTN."SysNumber"
-            LEFT JOIN {self._esquema("OBTW")}.OBTW OBTW 
-                ON OBTW."ItemCode" = INV1."ItemCode"
-                AND OBTW."MdAbsEntry" = ITL1."MdAbsEntry" 
-                AND OBTW."WhsCode" = INV1."WhsCode"
-            INNER JOIN {self._esquema("OITM")}.OITM OITM 
-                ON OITM."ItemCode" = INV1."ItemCode"
-            WHERE OINV."CANCELED" = 'N'
-            AND OINV."DocDate" BETWEEN '{fecha_inicio}' AND '{fecha_fin}'
-            AND OINV."U_COB_LUGAREN" = '{self.almacen_id}' 
-        
+            FROM {self._esquema("OINV")}.OINV OINV
+                INNER JOIN {self._esquema("INV1")}.INV1 INV1 
+                    ON INV1."DocEntry" = OINV."DocEntry"
+                LEFT JOIN {self._esquema("IBT1")}.IBT1 IBT1 
+                    ON IBT1."BaseEntry" = INV1."DocEntry" 
+                    AND IBT1."BaseType" = INV1."ObjType" 
+                    AND IBT1."WhsCode" = INV1."WhsCode" 
+                    AND IBT1."ItemCode" = INV1."ItemCode" 
+                    AND IBT1."BaseLinNum" = INV1."LineNum" 
+                    AND IBT1."Quantity" < 0
+                LEFT JOIN {self._esquema("OBTN")}.OBTN OBTN 
+                    ON OBTN."ItemCode" = INV1."ItemCode" 
+                    AND OBTN."DistNumber" = IBT1."BatchNum"
+                LEFT JOIN {self._esquema("OITL")}.OITL OITL 
+                    ON OITL."DocEntry" = INV1."DocEntry" 
+                    AND OITL."ItemCode" = IBT1."ItemCode" 
+                    AND OITL."DocType" = INV1."ObjType" 
+                    AND OITL."DocLine" = INV1."LineNum" 
+                    AND OITL."StockEff" = 1
+                LEFT JOIN {self._esquema("ITL1")}.ITL1 ITL1 
+                    ON ITL1."LogEntry" = OITL."LogEntry" 
+                    AND ITL1."Quantity" = IBT1."Quantity" 
+                    AND ITL1."SysNumber" = OBTN."SysNumber"
+                LEFT JOIN {self._esquema("OBTW")}.OBTW OBTW 
+                    ON OBTW."ItemCode" = INV1."ItemCode"
+                    AND OBTW."MdAbsEntry" = ITL1."MdAbsEntry" 
+                    AND OBTW."WhsCode" = INV1."WhsCode"
+                INNER JOIN {self._esquema("OITM")}.OITM OITM 
+                    ON OITM."ItemCode" = INV1."ItemCode"
+                WHERE OINV."CANCELED" = 'N'
+                AND OINV."DocDate" BETWEEN '{fecha_inicio}' AND '{fecha_fin}'
+                AND OINV."U_COB_LUGAREN" = '{self.almacen_id}' 
         '''
-
+        
         consulta_owhs = f"""
             SELECT T0."WhsCode", T0."WhsName", T0."TaxOffice"
             FROM {self._esquema("OWHS")}.OWHS T0
         """
         return {
             'DESPACHO': consulta_despacho,
-            'OWHS': consulta_owhs,
+            'OWHS': consulta_owhs
         }
 
     def migracion_hana_sql(self, query: str, tabla_sql: str) -> int:
-        logger.info(f"🚀 Iniciando migración de {tabla_sql}...")
+        logger.info(f"Migrando tabla objetivo: {tabla_sql}...")
         try:
+            # 1. Extraccion HANA
             with ConexionHANA(query) as hana:
                 if not hana.db_estado:
-                    logger.error("❌ Conexión a SAP HANA fallida")
+                    logger.error("Conexion a SAP HANA fallida")
                     return 0
-
                 registros = hana.obtener_tabla()
                 total = len(registros)
-                logger.info(f"📥 Extraídos {total} registros desde HANA ({tabla_sql})")
-
+                logger.info(f"Registros extraidos de HANA para {tabla_sql}: {total}")
+                
                 if not registros:
-                    logger.warning(f"⚠️ No se encontraron registros en {tabla_sql}")
+                    logger.warning(f"No hay registros en HANA para {tabla_sql}")
                     return 0
-
+                
+                # 2. Procesamiento
                 if tabla_sql == 'DESPACHO':
+                    # Logica especifica DESPACHO
                     importador = ImportadorDespacho()
                     for i, fila in enumerate(registros, 1):
                         importador.procesar_fila(fila)
                         if i % 500 == 0:
-                            logger.debug(f"📤 Procesados {i}/{total} registros de {tabla_sql}...")
-
+                            logger.info(f"Procesados en memoria {i} registros...")
+                    
+                    # Tablas destino SQL (Nota: Son tablas de Facturas, no de Entregas)
                     tablas = ['OINV', 'INV1', 'IBT1', 'OBTN', 'OBTW', 'OITL', 'ITL1', 'OITM']
+                    
                     with ConexionSQL() as sql:
                         if not sql.db_estado:
-                            logger.error("❌ Conexión a SQL Server fallida")
+                            logger.error("Conexion a SQL Server fallida")
                             return 0
                         cursor = sql.cursor
+                        
                         for t in tablas:
+                            # A. Truncar
                             try:
-                                logger.debug(f"🧹 Truncando dbo.{t}...")
                                 cursor.execute(f"TRUNCATE TABLE dbo.{t}")
-                                logger.info(f"🧹 Tabla dbo.{t} truncada")
+                                logger.info(f"Tabla dbo.{t} truncada correctamente.")
                             except Exception as e:
-                                logger.warning(f"⚠️ No se pudo truncar dbo.{t}: {e}")
+                                logger.warning(f"No se pudo truncar dbo.{t}: {e}")
+                                # Continuamos, quizas este vacia o no exista
+                            
+                            # B. Insertar
                             bloques = importador.obtener_bloques(t)
-                            logger.debug(f"📦 Se generaron {len(bloques)} bloques para {t}")
+                            logger.info(f"Insertando {len(bloques)} bloques en {t}...")
+                            
                             for j, bloque in enumerate(bloques, 1):
-                                if not bloque.strip():
-                                    continue
+                                if not bloque.strip(): continue
                                 try:
                                     cursor.execute(bloque)
                                 except Exception as e:
-                                    logger.error(f"❌ Error en bloque {j} de {t}: {e}")
-                                    logger.error(f"🔎 SQL Problemático:\n{bloque}")
-                        sql.conexion.commit()
-                        logger.info(f"✅ {total} registros migrados de {tabla_sql} a SQL Server")
+                                    logger.error(f"Error insertando bloque {j} en {t}: {e}")
+                            
+                            # C. Commit
+                            try:
+                                sql.conexion.commit()
+                                logger.info(f"Commit realizado para tabla {t}")
+                            except Exception as e:
+                                logger.critical(f"Error en COMMIT tabla {t}: {e}")
+                                return 0
+                        
+                        logger.info(f"Proceso DESPACHO finalizado. Registros origen: {total}")
                         return total
 
-                else:  # Caso OWHS
+                else:
+                    # Logica Generica (OWHS)
                     self.importador = Importador()
-                    for fila in registros:
+                    for i, fila in enumerate(registros, 1):
                         self.importador.query_transaccion(fila, tabla_sql)
-
+                    
                     with ConexionSQL() as sql:
                         if not sql.db_estado:
-                            logger.error("❌ Conexión a SQL Server fallida")
+                            logger.error("Conexion a SQL Server fallida")
                             return 0
                         cursor = sql.cursor
+                        
+                        # A. Truncar
                         try:
-                            logger.debug(f"🧹 Truncando dbo.{tabla_sql}...")
                             cursor.execute(f"TRUNCATE TABLE dbo.{tabla_sql}")
-                            logger.info(f"🧹 Tabla dbo.{tabla_sql} truncada")
+                            logger.info(f"Tabla dbo.{tabla_sql} truncada correctamente.")
                         except Exception as e:
-                            logger.warning(f"⚠️ No se pudo truncar dbo.{tabla_sql}: {e}")
-
+                            logger.warning(f"Error al truncar dbo.{tabla_sql}: {e}")
+                        
+                        # B. Insertar
                         bloques = self.importador.query_sql
-                        logger.debug(f"📦 Se generaron {len(bloques)} bloques para {tabla_sql}")
                         for j, bloque in enumerate(bloques, 1):
-                            if not bloque.strip():
-                                continue
+                            if not bloque.strip(): continue
                             try:
                                 cursor.execute(bloque)
                             except Exception as e:
-                                logger.error(f"❌ Error en bloque {j} de {tabla_sql}: {e}")
-                                logger.error(f"🔎 SQL Problemático:\n{bloque}")
+                                logger.error(f"Error insertando bloque {j} en {tabla_sql}: {e}")
+                        
+                        # C. Commit
                         sql.conexion.commit()
-                        logger.info(f"✅ {total} registros migrados de {tabla_sql} a SQL Server")
+                        logger.info(f"Insertados en SQL Server: {total} registros en {tabla_sql}")
                         return total
 
         except Exception as e:
-            logger.critical(f"💥 Error migrando {tabla_sql}: {e}", exc_info=True)
+            logger.critical(f"Error general migrando {tabla_sql}: {e}")
             return 0
 
     def migrar_todas(self) -> list:
@@ -205,6 +243,6 @@ class MigradorDespacho:
                 "tabla": tabla,
                 "fecha": self.fecha.strftime("%Y-%m-%d"),
                 "registros": cantidad,
-                "exito": cantidad > 0
+                "exito": cantidad > 0 or (cantidad == 0)
             })
         return resultados

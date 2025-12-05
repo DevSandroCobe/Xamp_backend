@@ -1,88 +1,131 @@
 import logging
 import traceback
+import os
+import shutil
+import time
+import zipfile
+from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from datetime import date
-from fastapi import APIRouter, HTTPException
+from datetime import date, datetime
 from Conexion.conexion_sql import ConexionSQL
+
+# Importamos la función generadora específica de Recepción
 from generador_pdf.pdf_generator import generar_pdf_acta_recepcion
 
-# Agrega esto junto con tus otros imports
-from typing import Optional
+router = APIRouter()
 
-# --------------------------------------------------------
-# Configuración del Logger
-# --------------------------------------------------------
-LOG_FILE = "resepcion.log"
+# ==========================================
+# CONFIGURACION DE LOGS
+# ==========================================
+LOG_DIR = "Logs"
+os.makedirs(LOG_DIR, exist_ok=True)
+
+LOG_FILE = os.path.join(LOG_DIR, "pdf_recepcion.log")
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.FileHandler(LOG_FILE, encoding="utf-8"),
         logging.StreamHandler()
-    ]
+    ],
 )
 logger = logging.getLogger(__name__)
 
-# --------------------------------------------------------
-# Router
-# --------------------------------------------------------
-router = APIRouter()
 
 class PDFRecepcionRequest(BaseModel):
     fecha: date
     firma: str
 
+
+# --- FUNCION DE LIMPIEZA ---
+def borrar_archivos_temporales(ruta_carpeta):
+    try:
+        time.sleep(2)
+        if os.path.exists(ruta_carpeta):
+            shutil.rmtree(ruta_carpeta)
+            logger.info(f"Carpeta temporal eliminada: {ruta_carpeta}")
+    except Exception as e:
+        logger.warning(f"No se pudo eliminar la carpeta {ruta_carpeta}: {e}")
+
+
+# --- ENDPOINT PRINCIPAL (RECEPCION) ---
 @router.post("/generar_pdf_recepcion/")
-def generar_pdf_recepcion(data: PDFRecepcionRequest):
-    fecha = data.fecha.strftime("%Y-%m-%d")
-    logger.info(f"➡ Fecha recibida: {fecha}")
+def generar_pdf_recepcion(data: PDFRecepcionRequest, background_tasks: BackgroundTasks):
+
+    # 1. Preparar Carpetas Temporales
+    timestamp = int(time.time())
+    nombre_unico = f"Lote_Recepcion_{timestamp}"
+    
+    base_temp = os.path.join(os.getcwd(), "Temp_Downloads")
+    carpeta_trabajo = os.path.join(base_temp, nombre_unico)
+    carpeta_pdfs = os.path.join(carpeta_trabajo, "PDFs")
+
+    os.makedirs(carpeta_pdfs, exist_ok=True)
+
+    fecha_str_log = data.fecha.strftime("%Y-%m-%d")
+    logger.info(f"Iniciando proceso masivo ZIP (Recepcion) para fecha: {fecha_str_log}")
 
     try:
-        # 1️⃣ Obtener lista de DocEntries
+        # 2. LOGICA SQL
         with ConexionSQL() as conn:
             cursor = conn.cursor
-            logger.info(f"📦 Ejecutando SP: LISTADO_DOC_ACTA_RECEP_TS '{fecha}'")
-            cursor.execute("{CALL LISTADO_DOC_ACTA_RECEP_TS (?)}", fecha)
+            # SP especifico de Recepcion
+            sp_listado = "{CALL LISTADO_DOC_ACTA_RECEP_TS (?)}"
+            logger.info(f"Ejecutando SP: {sp_listado} con fecha {fecha_str_log}")
+            cursor.execute(sp_listado, fecha_str_log)
             rows = cursor.fetchall()
             docentries = [row[0] for row in rows]
-            logger.info(f"➡ DocEntries encontrados: {docentries}")
+            logger.info(f"DocEntries encontrados: {docentries}")
 
-        rutas_generadas = []
+        if not docentries:
+            raise HTTPException(
+                status_code=404, detail="No se encontraron actas de recepcion para esta fecha."
+            )
 
-        # 2️⃣ Procesar cada DocEntry
+        archivos_para_zip = []
+
+        # 3. BUCLE DE GENERACION
         for docentry in docentries:
             with ConexionSQL() as conn:
                 cursor = conn.cursor
-                logger.info(f"🔍 Obteniendo datos para DocEntry {docentry}")
+                logger.info(f"Obteniendo datos para DocEntry {docentry}")
+                
+                # SP especifico de detalle Recepcion
                 cursor.execute("EXEC INFO_DOC_ACTA_RECEP_TS ?", docentry)
+
+                if cursor.description is None:
+                    continue
+
                 columnas = [col[0] for col in cursor.description]
                 registros = [dict(zip(columnas, row)) for row in cursor.fetchall()]
 
             if not registros:
-                logger.warning(f"⚠️ DocEntry {docentry} no tiene registros. Saltando.")
+                logger.warning(f"DocEntry {docentry} no tiene registros. Saltando.")
                 continue
 
             encabezado = registros[0]
             productos = registros[0:]
 
-            logger.info(f"📄 Generando PDF para DocEntry {docentry} | Guia: {encabezado.get('NroDeGuia')}")
+            logger.info(f"Generando PDF para DocEntry {docentry} | Guia: {encabezado.get('NroDeGuia')}")
 
-            # Formatear productos para el PDF
+            # --- Formateo de productos (Logica especifica de Recepcion) ---
             productos_formateados = []
             for item in productos:
-                # Convertir None a "" en todos los campos relevantes
                 def safe(val):
                     if val is None or str(val).strip().lower() == 'none':
                         return ""
                     return str(val)
+
                 try:
                     dia = safe(item.get('Dia'))
                     mes = safe(item.get('Mes'))
                     anio = item.get('Anio')
-                    if anio is not None:
+                    if anio is not None and anio != "":
                         anio = str(int(anio) + 2000)
                     else:
-                        anio = ''
+                        anio = ""
                     fecha_vcto = f"{dia.zfill(2)}/{mes.zfill(2)}/{anio}"
                 except Exception:
                     fecha_vcto = "N/A"
@@ -101,78 +144,95 @@ def generar_pdf_recepcion(data: PDFRecepcionRequest):
                     "vencimiento": fecha_vcto,
                     "rs": safe(item.get("RegistroSan")),
                     "condicion": safe(item.get("CondAlmac")),
+                    # Campos extras especificos de recepcion
                     "fabricante": safe(item.get("Fabricante")),
                     "fechvencimiento": safe(item.get("FechaVenc"))
                 })
 
-            fecha_str = data.fecha.strftime("%d-%m-%Y")
-
-            # Formatear DocDate (puede venir como datetime o string)
+            # --- Formateo de fechas ---
+            fecha_str_pdf = data.fecha.strftime("%d-%m-%Y")
             docdate_val = encabezado.get("DocDate")
             if docdate_val:
                 try:
-                    # Si es datetime, formatear; si es string, dejar igual
                     if hasattr(docdate_val, 'strftime'):
                         docdate_str = docdate_val.strftime("%d-%m-%Y")
                     else:
-                        # Si viene como 'YYYY-MM-DD' o similar
-                        from datetime import datetime
                         docdate_str = datetime.strptime(str(docdate_val)[:10], "%Y-%m-%d").strftime("%d-%m-%Y")
                 except Exception:
                     docdate_str = str(docdate_val)
             else:
                 docdate_str = ""
 
+            # --- Construccion del Diccionario para el PDF ---
             data_pdf = {
-                "fecha": fecha_str,
+                "fecha": fecha_str_pdf,
                 "docdate": docdate_str,
-                "guia": encabezado["NroDeGuia"],       
-                "AlmOrigen": encabezado["AlmacenEnvio"],   
-                "AlmDestino": encabezado["AlmacenDestino"], 
+                "guia": encabezado.get("NroDeGuia"),      
+                "AlmOrigen": encabezado.get("AlmacenEnvio"),   
+                "AlmDestino": encabezado.get("AlmacenDestino"), 
                 "productos": productos_formateados,
-                "firma": data.firma,  # <-- pasa la firma a la plantilla
+                "firma": data.firma,
             }
 
             try:
-                ruta = generar_pdf_acta_recepcion(data_pdf)
-                logger.info(f"✅ PDF generado: {ruta}")
-                rutas_generadas.append(ruta)
+                # 4. Generar PDF (Usando funcion especifica de recepcion)
+                ruta_original = generar_pdf_acta_recepcion(data_pdf)
+
+                # Copiar a carpeta temporal para el ZIP
+                if os.path.exists(ruta_original):
+                    nombre_archivo = os.path.basename(ruta_original)
+                    ruta_destino_zip = os.path.join(carpeta_pdfs, nombre_archivo)
+                    shutil.copy2(ruta_original, ruta_destino_zip)
+                    archivos_para_zip.append(ruta_destino_zip)
+                    logger.info(f"PDF agregado al lote: {nombre_archivo}")
+                else:
+                    logger.error(f"El archivo generado no existe: {ruta_original}")
+
             except Exception as pdf_error:
-                logger.error(f"❌ Error generando PDF para DocEntry {docentry}: {pdf_error}")
+                logger.error(f"Error generando PDF DocEntry {docentry}: {pdf_error}")
                 logger.debug(traceback.format_exc())
 
-        logger.info(f"🏁 Proceso finalizado. Total PDFs: {len(rutas_generadas)}")
-        return {"estado": "ok", "archivos_generados": rutas_generadas}
+        # 5. CREAR ZIP FINAL
+        if not archivos_para_zip:
+            raise HTTPException(
+                status_code=500, detail="No se genero ningun PDF valido."
+            )
+
+        nombre_zip = f"Actas_Recepcion_{fecha_str_log}.zip"
+        ruta_zip_final = os.path.join(carpeta_trabajo, nombre_zip)
+
+        logger.info(f"Comprimiendo {len(archivos_para_zip)} archivos...")
+        with zipfile.ZipFile(ruta_zip_final, "w") as zipf:
+            for archivo in archivos_para_zip:
+                zipf.write(archivo, arcname=os.path.basename(archivo))
+
+        # 6. ENVIAR Y LIMPIAR
+        background_tasks.add_task(borrar_archivos_temporales, carpeta_trabajo)
+
+        logger.info("Enviando ZIP al cliente...")
+        return FileResponse(
+            path=ruta_zip_final, filename=nombre_zip, media_type="application/zip"
+        )
 
     except Exception as e:
-        logger.critical(f"🔥 Error en generar_pdf_recepcion: {e}")
+        borrar_archivos_temporales(carpeta_trabajo)
+        logger.critical(f"Error critico en Recepcion: {e}")
         logger.debug(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=f"Error generando PDF traslado: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
-
-# Agrega este modelo Pydantic
-class VerificarMigracionRequest(BaseModel):
-    fecha: date
-    grupo: str
-
-# Agrega este endpoint (junto con tus otros routers)
+# --- VERIFICACION MIGRACION (RECEPCION) ---
 @router.get("/verificar_migracion/")
 def verificar_migracion(fecha: str, grupo: str):
-    """
-    Verifica si los datos para una fecha y grupo específico ya fueron migrados
-    """
-    logger.info(f"🔍 Verificando migración para fecha: {fecha}, grupo: {grupo}")
-
+    logger.info(f"Verificando migracion Recepcion: {fecha}, grupo: {grupo}")
     try:
-        # 1️⃣ Validar parámetros
-        if grupo.lower() != "traslados":
-            return {"migrado": False, "mensaje": "Grupo no válido"}
+        if grupo.lower() != "recepcion":
+             pass 
 
-        # 2️⃣ Consultar a la base de datos usando U_BPP_FECINITRA
         with ConexionSQL() as conn:
             cursor = conn.cursor
-            # U_BPP_FECINITRA es tipo string (YYYY-MM-DD) o date, así que convertimos a string para comparar
+            # NOTA: Verifica que OWTR sea la tabla correcta para recepcion. 
+            # Si recepcion se refiere a una Entrada de Mercancia, podria ser OPDN o IGN1.
             query = """
             SELECT COUNT(*) 
             FROM OWTR 
@@ -180,24 +240,12 @@ def verificar_migracion(fecha: str, grupo: str):
             """
             cursor.execute(query, fecha)
             count = cursor.fetchone()[0]
-
             migrado = count > 0
+            
             mensaje = f"Datos {'ya migrados' if migrado else 'no migrados'} para {fecha}"
-
-            logger.info(f"✔ Resultado verificación: {mensaje}")
-            return {
-                "migrado": migrado,
-                "mensaje": mensaje,
-                "detalle": {
-                    "fecha_consultada": fecha,
-                    "registros_encontrados": count
-                }
-            }
-
+            logger.info(f"Resultado: {mensaje}")
+            return {"migrado": migrado, "mensaje": mensaje}
+            
     except Exception as e:
-        logger.error(f"❌ Error verificando migración: {str(e)}")
-        logger.debug(traceback.format_exc())
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error al verificar migración: {str(e)}"
-        )
+        logger.error(f"Error verificando: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
