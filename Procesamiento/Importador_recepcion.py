@@ -1,116 +1,111 @@
-class ImportadorRecepcion:
+from Procesamiento.Importador import Importador
+import logging
+
+logger = logging.getLogger(__name__)
+
+class ImportadorRecepcion(Importador):
     def __init__(self):
+        super().__init__()
+
+        # --- MAPA DE INDICES (Basado en tu Query de Recepcion) ---
+        self.INDICES = {
+            'OWTR': (0, 11),   # Cabecera (DocEntry, DocNum...)
+            'WTR1': (11, 17),  # Detalle (ItemCode, Quantity...)
+            'OITL': (17, 24),  # Log Transaccion
+            'ITL1': (24, 29),  # Detalle Log
+            'OBTN': (29, 35),  # Maestro Lotes
+            'OBTW': (35, 40),  # Lotes por Almacen
+            'OITM': (40, 47)   # Maestro Articulos
+        }
+
+        # --- ALMACEN DE QUERIES ---
         self.inserts = {
-            'OWTR': [],
-            'WTR1': [],
-            'OITL': [],
-            'ITL1': [],
-            'OBTN': [],
-            'OBTW': [],
-            'OITM': []
+            'OWTR': [], 'WTR1': [], 'OITL': [], 'ITL1': [], 
+            'OBTN': [], 'OBTW': [], 'OITM': []
         }
-        # Control de duplicados para evitar errores de Primary Key
-        self.procesados = {
-            'OWTR': set(),
-            'WTR1': set(),
-            'OITL': set(),
-            'ITL1': set(),
-            'OBTN': set(),
-            'OBTW': set(),
-            'OITM': set()
-        }
-
-    def _str(self, val):
-        if val is None:
-            return "NULL"
-        # Limpieza estándar para SQL
-        clean = str(val).replace('"', '').replace("'", "''")
-        return f"'{clean}'"
-
-    def agregar_owtr(self, fila):
-        # OWTR: 11 campos (0-10)
-        doc_entry = fila[0]
-        if doc_entry in self.procesados['OWTR']:
-            return
-            
-        stmt = f"INSERT INTO OWTR VALUES({','.join([self._str(x) for x in fila[0:11]])})"
-        self.inserts['OWTR'].append(stmt)
-        self.procesados['OWTR'].add(doc_entry)
-
-    def agregar_wtr1(self, fila):
-        # WTR1: 6 campos (11-16) - PK: DocEntry + LineNum
-        llave = (fila[11], fila[12])
-        if llave in self.procesados['WTR1']:
-            return
-
-        stmt = f"INSERT INTO WTR1 VALUES({','.join([self._str(x) for x in fila[11:17]])})"
-        self.inserts['WTR1'].append(stmt)
-        self.procesados['WTR1'].add(llave)
-
-    def agregar_oitl(self, fila):
-        # OITL: 7 campos (17-23) - PK: LogEntry
-        log_entry = fila[17]
-        if not log_entry or log_entry in self.procesados['OITL']:
-            return
-
-        stmt = f"INSERT INTO OITL VALUES({','.join([self._str(x) for x in fila[17:24]])})"
-        self.inserts['OITL'].append(stmt)
-        self.procesados['OITL'].add(log_entry)
-
-    def agregar_itl1(self, fila):
-        # ITL1: 5 campos (24-28) - PK compuesta
-        # Usamos LogEntry(24) + ItemCode(25) + SysNumber(27)
-        llave = (fila[24], fila[25], fila[27])
-        if llave in self.procesados['ITL1']:
-            return
-
-        stmt = f"INSERT INTO ITL1 VALUES({','.join([self._str(x) for x in fila[24:29]])})"
-        self.inserts['ITL1'].append(stmt)
-        self.procesados['ITL1'].add(llave)
-
-    def agregar_obtn(self, fila):
-        # OBTN: 6 campos (29-34) - PK: ItemCode + DistNumber
-        item_code = fila[29]
-        dist_number = fila[30]
-        llave = (item_code, dist_number)
         
-        if not item_code or llave in self.procesados['OBTN']:
-            return
+        # --- MEMORIA CACHE (Evitar Duplicados) ---
+        self.procesados = {
+            'OWTR': set(), # PK: DocEntry
+            'WTR1': set(), # PK: DocEntry + LineNum
+            'OITL': set(), # PK: LogEntry
+            'ITL1': set(), # PK: LogEntry + ItemCode + SysNumber
+            'OBTN': set(), # PK: ItemCode + DistNumber
+            'OBTW': set(), # PK: AbsEntry
+            'OITM': set()  # PK: ItemCode
+        }
 
-        stmt = f"INSERT INTO OBTN VALUES({','.join([self._str(x) for x in fila[29:35]])})"
-        self.inserts['OBTN'].append(stmt)
-        self.procesados['OBTN'].add(llave)
-
-    def agregar_obtw(self, fila):
-        # OBTW: 5 campos (35-39) - PK: AbsEntry
-        abs_entry = fila[39]
-        if not abs_entry or abs_entry in self.procesados['OBTW']:
-            return
-
-        stmt = f"INSERT INTO OBTW VALUES({','.join([self._str(x) for x in fila[35:40]])})"
-        self.inserts['OBTW'].append(stmt)
-        self.procesados['OBTW'].add(abs_entry)
-
-    def agregar_oitm(self, fila):
-        # OITM: 7 campos (40-46) - PK: ItemCode
-        # Nota: Ajusta a fila[40:47] si son 7 campos, o [40:48] si son 8. 
-        # Basado en tu query de Recepción (7 campos), es [40:47].
-        item_code = fila[40]
-        if not item_code or item_code in self.procesados['OITM']:
-            return
-
-        stmt = f"INSERT INTO OITM VALUES({','.join([self._str(x) for x in fila[40:47]])})"
-        self.inserts['OITM'].append(stmt)
-        self.procesados['OITM'].add(item_code)
+    def _generar_sql(self, tabla, valores):
+        vals_str = []
+        for v in valores:
+            if v is None:
+                vals_str.append("NULL")
+            else:
+                val_limpio = str(v).replace("'", "''")
+                vals_str.append(f"'{val_limpio}'")
+        return f"INSERT INTO {tabla} VALUES({','.join(vals_str)})"
 
     def procesar_fila(self, fila):
-        self.agregar_owtr(fila)
-        self.agregar_wtr1(fila)
-        self.agregar_oitl(fila)
-        self.agregar_itl1(fila)
-        self.agregar_obtn(fila)
-        self.agregar_obtw(fila)
-        self.agregar_oitm(fila)
+        try:
+            # 1. CABECERA (OWTR) - PK: DocEntry
+            doc_entry = fila[0]
+            if doc_entry not in self.procesados['OWTR']:
+                rango = self.INDICES['OWTR']
+                stmt = self._generar_sql('OWTR', fila[rango[0]:rango[1]])
+                self.inserts['OWTR'].append(stmt)
+                self.procesados['OWTR'].add(doc_entry)
+
+            # 2. DETALLE (WTR1) - PK: DocEntry + LineNum
+            pk_wtr1 = (fila[11], fila[12])
+            if pk_wtr1 not in self.procesados['WTR1']:
+                rango = self.INDICES['WTR1']
+                stmt = self._generar_sql('WTR1', fila[rango[0]:rango[1]])
+                self.inserts['WTR1'].append(stmt)
+                self.procesados['WTR1'].add(pk_wtr1)
+
+            # 3. LOG (OITL) - PK: LogEntry
+            log_entry = fila[17]
+            if log_entry not in self.procesados['OITL']:
+                rango = self.INDICES['OITL']
+                stmt = self._generar_sql('OITL', fila[rango[0]:rango[1]])
+                self.inserts['OITL'].append(stmt)
+                self.procesados['OITL'].add(log_entry)
+
+            # 4. DETALLE LOG (ITL1) - PK: LogEntry + ItemCode + SysNumber
+            pk_itl1 = (fila[24], fila[25], fila[27])
+            if pk_itl1 not in self.procesados['ITL1']:
+                rango = self.INDICES['ITL1']
+                stmt = self._generar_sql('ITL1', fila[rango[0]:rango[1]])
+                self.inserts['ITL1'].append(stmt)
+                self.procesados['ITL1'].add(pk_itl1)
+
+            # 5. MAESTRO LOTES (OBTN) - PK: ItemCode + DistNumber
+            pk_obtn = (fila[29], fila[30])
+            if pk_obtn not in self.procesados['OBTN']:
+                rango = self.INDICES['OBTN']
+                stmt = self._generar_sql('OBTN', fila[rango[0]:rango[1]])
+                self.inserts['OBTN'].append(stmt)
+                self.procesados['OBTN'].add(pk_obtn)
+
+            # 6. LOTES ALMACEN (OBTW) - PK: AbsEntry
+            # Nota: El indice relativo 4 es el AbsEntry (el ultimo del slice)
+            abs_entry = fila[39]
+            if abs_entry not in self.procesados['OBTW']:
+                rango = self.INDICES['OBTW']
+                stmt = self._generar_sql('OBTW', fila[rango[0]:rango[1]])
+                self.inserts['OBTW'].append(stmt)
+                self.procesados['OBTW'].add(abs_entry)
+
+            # 7. ARTICULOS (OITM) - PK: ItemCode
+            item_code = fila[40]
+            if item_code not in self.procesados['OITM']:
+                rango = self.INDICES['OITM']
+                stmt = self._generar_sql('OITM', fila[rango[0]:rango[1]])
+                self.inserts['OITM'].append(stmt)
+                self.procesados['OITM'].add(item_code)
+
+        except Exception as e:
+            logger.error(f"Error procesando fila Recepcion: {e}")
 
     def obtener_bloques(self, tabla):
         return self.inserts.get(tabla, [])

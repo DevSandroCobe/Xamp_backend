@@ -35,7 +35,7 @@ def generar_pdf_acta_traslado(data: dict) -> str:
         # 5. Nombre de archivo: usar el nombre pasado si existe, si no generar uno por defecto
         nombre_pdf = data.get('nombre_pdf')
         if not nombre_pdf:
-            nombre_pdf = f"Acta_Traslado_{data['guia']}.pdf"
+            nombre_pdf = f"{data['guia']}.pdf"
         ruta_pdf = os.path.join(subcarpeta, nombre_pdf)
 
         # 6. Generar PDF
@@ -76,7 +76,7 @@ def generar_pdf_acta_ventas(data: dict) -> str:
         html_content = template.render(**data)
 
         # 5. Nombre del archivo
-        nombre_pdf = f"Acta_Ventas_{data.get('guia', data.get('numCard', ''))}.pdf"
+        nombre_pdf = f"{data.get('guia', data.get('numCard', ''))}.pdf"
         ruta_pdf = os.path.join(subcarpeta, nombre_pdf)
 
         # 6. Generar PDF (igual que traslado)

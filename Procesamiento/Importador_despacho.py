@@ -1,122 +1,110 @@
-class ImportadorDespacho:
+from Procesamiento.Importador import Importador
+import logging
+
+logger = logging.getLogger(__name__)
+
+class ImportadorDespacho(Importador):
     def __init__(self):
+        # 1. Inicializamos al Padre para reutilizar herramientas de limpieza y bloques
+        super().__init__()
+
+        # 2. CONFIGURACION DE RANGOS (SLICES)
+        # Extraído de la lógica de tu código original para mantener compatibilidad
+        self.INDICES = {
+            'OINV': (0, 14),   # 14 campos
+            'INV1': (14, 23),  # 9 campos
+            'IBT1': (23, 30),  # 7 campos
+            'OBTN': (30, 36),  # 6 campos
+            'OBTW': (36, 41),  # 5 campos
+            'OITL': (41, 48),  # 7 campos
+            'ITL1': (48, 53),  # 5 campos
+            'OITM': (53, 60)   # 7 campos
+        }
+
+        # 3. ALMACEN DE QUERIES
         self.inserts = {
-            'OINV': [],
-            'INV1': [],
-            'IBT1': [],
-            'OBTN': [],
-            'OBTW': [],
-            'OITL': [],
-            'ITL1': [],
-            'OITM': []
+            'OINV': [], 'INV1': [], 'IBT1': [], 'OBTN': [],
+            'OBTW': [], 'OITL': [], 'ITL1': [], 'OITM': []
         }
-        # Control de duplicados para evitar errores de Primary Key
-        self.procesados = {
-            'OINV': set(),
-            'INV1': set(),
-            'OBTN': set(),
-            'OBTW': set(),
-            'OITL': set(),
-            'ITL1': set(),
-            'OITM': set()
-        }
-
-    def _str(self, val):
-        if val is None:
-            return "NULL"
-        # Limpieza estándar para SQL
-        clean = str(val).replace('"', '').replace("'", "''")
-        return f"'{clean}'"
-
-    def agregar_oinv(self, fila):
-        # OINV: 14 campos (0-13) - PK: DocEntry
-        doc_entry = fila[0]
-        if doc_entry in self.procesados['OINV']:
-            return
-
-        stmt = f"INSERT INTO OINV VALUES({','.join([self._str(x) for x in fila[0:14]])})"
-        self.inserts['OINV'].append(stmt)
-        self.procesados['OINV'].add(doc_entry)
-
-    def agregar_inv1(self, fila):
-        # INV1: 9 campos (14-22) - PK: DocEntry + LineNum
-        llave = (fila[14], fila[18])
-        if llave in self.procesados['INV1']:
-            return
-
-        stmt = f"INSERT INTO INV1 VALUES({','.join([self._str(x) for x in fila[14:23]])})"
-        self.inserts['INV1'].append(stmt)
-        self.procesados['INV1'].add(llave)
-
-    def agregar_ibt1(self, fila):
-        # IBT1: 7 campos (23-29)
-        # Esta tabla vincula lotes con lineas, se insertan todas las filas que vienen.
-        stmt = f"INSERT INTO IBT1 VALUES({','.join([self._str(x) for x in fila[23:30]])})"
-        self.inserts['IBT1'].append(stmt)
-
-    def agregar_obtn(self, fila):
-        # OBTN: 6 campos (30-35) - PK: ItemCode + DistNumber
-        item_code = fila[30]
-        dist_number = fila[31]
-        llave = (item_code, dist_number)
         
-        if not item_code or llave in self.procesados['OBTN']:
-            return
+        # 4. MEMORIA CACHE (Control de duplicados de Llave Primaria)
+        self.procesados = {
+            'OINV': set(), # PK: DocEntry
+            'INV1': set(), # PK: DocEntry + LineNum
+            'OBTN': set(), # PK: ItemCode + DistNumber
+            'OBTW': set(), # PK: AbsEntry
+            'OITL': set(), # PK: LogEntry
+            'ITL1': set(), # PK: LogEntry + ItemCode + SysNumber
+            'OITM': set()  # PK: ItemCode
+        }
 
-        stmt = f"INSERT INTO OBTN VALUES({','.join([self._str(x) for x in fila[30:36]])})"
-        self.inserts['OBTN'].append(stmt)
-        self.procesados['OBTN'].add(llave)
-
-    def agregar_obtw(self, fila):
-        # OBTW: 5 campos (36-40) - PK: AbsEntry
-        abs_entry = fila[40]
-        if not abs_entry or abs_entry in self.procesados['OBTW']:
-            return
-
-        stmt = f"INSERT INTO OBTW VALUES({','.join([self._str(x) for x in fila[36:41]])})"
-        self.inserts['OBTW'].append(stmt)
-        self.procesados['OBTW'].add(abs_entry)
-
-    def agregar_oitl(self, fila):
-        # OITL: 7 campos (41-47) - PK: LogEntry
-        log_entry = fila[41]
-        if not log_entry or log_entry in self.procesados['OITL']:
-            return
-
-        stmt = f"INSERT INTO OITL VALUES({','.join([self._str(x) for x in fila[41:48]])})"
-        self.inserts['OITL'].append(stmt)
-        self.procesados['OITL'].add(log_entry)
-
-    def agregar_itl1(self, fila):
-        # ITL1: 5 campos (48-52) - PK Compuesta
-        # LogEntry(48) + ItemCode(49) + SysNumber(51)
-        llave = (fila[48], fila[49], fila[51])
-        if llave in self.procesados['ITL1']:
-            return
-
-        stmt = f"INSERT INTO ITL1 VALUES({','.join([self._str(x) for x in fila[48:53]])})"
-        self.inserts['ITL1'].append(stmt)
-        self.procesados['ITL1'].add(llave)
-
-    def agregar_oitm(self, fila):
-        # OITM: 7 campos (53-59) - PK: ItemCode
-        item_code = fila[53]
-        if not item_code or item_code in self.procesados['OITM']:
-            return
-
-        stmt = f"INSERT INTO OITM VALUES({','.join([self._str(x) for x in fila[53:60]])})"
-        self.inserts['OITM'].append(stmt)
-        self.procesados['OITM'].add(item_code)
+    def _generar_sql(self, tabla, valores):
+        """Genera el comando INSERT utilizando el formateador del padre."""
+        vals_str = [self._formatear_valor(x) for x in valores]
+        return f"INSERT INTO {tabla} VALUES({','.join(vals_str)})"
 
     def procesar_fila(self, fila):
-        self.agregar_oinv(fila)
-        self.agregar_inv1(fila)
-        self.agregar_ibt1(fila)
-        self.agregar_obtn(fila)
-        self.agregar_obtw(fila)
-        self.agregar_oitl(fila)
-        self.agregar_itl1(fila)
-        self.agregar_oitm(fila)
+        """Descompone la fila flat de HANA en las tablas de despacho en SQL Server."""
+        try:
+            # 1. OINV (Cabecera Factura)
+            doc_entry = fila[0]
+            if doc_entry not in self.procesados['OINV']:
+                r = self.INDICES['OINV']
+                self.inserts['OINV'].append(self._generar_sql('OINV', fila[r[0]:r[1]]))
+                self.procesados['OINV'].add(doc_entry)
+
+            # 2. INV1 (Detalle Factura)
+            # PK: DocEntry(14) + LineNum(18)
+            pk_inv1 = (fila[14], fila[18])
+            if pk_inv1 not in self.procesados['INV1']:
+                r = self.INDICES['INV1']
+                self.inserts['INV1'].append(self._generar_sql('INV1', fila[r[0]:r[1]]))
+                self.procesados['INV1'].add(pk_inv1)
+
+            # 3. IBT1 (Transaccion Lotes)
+            # Se insertan todos los registros que vinculan lotes
+            r = self.INDICES['IBT1']
+            self.inserts['IBT1'].append(self._generar_sql('IBT1', fila[r[0]:r[1]]))
+
+            # 4. OBTN (Maestro Lotes)
+            pk_obtn = (fila[30], fila[31]) # ItemCode + DistNumber
+            if pk_obtn[0] and pk_obtn not in self.procesados['OBTN']:
+                r = self.INDICES['OBTN']
+                self.inserts['OBTN'].append(self._generar_sql('OBTN', fila[r[0]:r[1]]))
+                self.procesados['OBTN'].add(pk_obtn)
+
+            # 5. OBTW (Lotes por Almacen)
+            abs_entry_lote = fila[40]
+            if abs_entry_lote and abs_entry_lote not in self.procesados['OBTW']:
+                r = self.INDICES['OBTW']
+                self.inserts['OBTW'].append(self._generar_sql('OBTW', fila[r[0]:r[1]]))
+                self.procesados['OBTW'].add(abs_entry_lote)
+
+            # 6. OITL (Log Transaccion)
+            log_entry = fila[41]
+            if log_entry and log_entry not in self.procesados['OITL']:
+                r = self.INDICES['OITL']
+                self.inserts['OITL'].append(self._generar_sql('OITL', fila[r[0]:r[1]]))
+                self.procesados['OITL'].add(log_entry)
+
+            # 7. ITL1 (Detalle Log)
+            # PK: LogEntry(48) + ItemCode(49) + SysNumber(51)
+            pk_itl1 = (fila[48], fila[49], fila[51])
+            if pk_itl1[0] and pk_itl1 not in self.procesados['ITL1']:
+                r = self.INDICES['ITL1']
+                self.inserts['ITL1'].append(self._generar_sql('ITL1', fila[r[0]:r[1]]))
+                self.procesados['ITL1'].add(pk_itl1)
+
+            # 8. OITM (Maestro Articulos)
+            item_code = fila[53]
+            if item_code and item_code not in self.procesados['OITM']:
+                r = self.INDICES['OITM']
+                self.inserts['OITM'].append(self._generar_sql('OITM', fila[r[0]:r[1]]))
+                self.procesados['OITM'].add(item_code)
+
+        except Exception as e:
+            logger.error(f"Error procesando fila en ImportadorDespacho: {e}")
 
     def obtener_bloques(self, tabla):
+        """Retorna la lista de sentencias SQL generadas para la tabla solicitada."""
         return self.inserts.get(tabla, [])

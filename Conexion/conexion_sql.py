@@ -27,10 +27,10 @@ class ConexionSQL:
                 f"PWD={CONFIG_SQL['password']};"
                 f"TrustServerCertificate=yes;"
             )
-            self.conexion = pyodbc.connect(conn_str)
+            self.conexion = pyodbc.connect(conn_str, autocommit=False)
             self.cursor = self.conexion.cursor()
             self.db_estado = True
-            logger.info("Conexión SQL Server establecida")
+            logger.info("Conexión SQL Server establecida (autocommit=False)")
         except Exception as e:
             logger.error(f"Error al conectar a SQL Server: {e}")
             self.db_estado = False
@@ -60,6 +60,13 @@ class ConexionSQL:
 
     def cerrar_conexion(self):
         try:
+            # CRITICAL: Commit final antes de cerrar para evitar rollback implícito
+            if self.conexion:
+                try:
+                    self.conexion.commit()
+                    logger.info("Commit final ejecutado antes de cerrar conexión")
+                except:
+                    pass
             if self.cursor:
                 self.cursor.close()
             if self.conexion:

@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 class PDFDespachoRequest(BaseModel):
     fecha: date
     firma: str
+    almacen_id: str
 
 
 # --- FUNCION DE LIMPIEZA ---
@@ -72,9 +73,9 @@ def generar_pdf_despacho(data: PDFDespachoRequest, background_tasks: BackgroundT
         with ConexionSQL() as conn:
             cursor = conn.cursor
             # SP especifico de Despacho
-            sp_listado = "EXEC LISTADO_DOC_ACTA_DESP_VENTA ?"
-            logger.info(f"Ejecutando SP: {sp_listado} con fecha {fecha_str_log}")
-            cursor.execute(sp_listado, fecha_str_log)
+            sp_listado = "{CALL LISTADO_DOC_ACTA_DESP_VENTA (?, ?)}"
+            logger.info(f"Ejecutando SP: {sp_listado} con {fecha_str_log} y {data.almacen_id}")
+            cursor.execute(sp_listado, (fecha_str_log, data.almacen_id))
             docentries = [row[0] for row in cursor.fetchall()]
             logger.info(f"DocEntries encontrados: {docentries}")
 

@@ -1,195 +1,105 @@
-from datetime import datetime
+import logging
+from datetime import datetime, date
+
+logger = logging.getLogger(__name__)
 
 class Importador:
     def __init__(self):
-        self.query_sql = ["USE SAP "]
-        self.estado = "procesando"
-        self.contador = 0
-        self.i = 0
-        self.limite = 400
+        self.query_sql = []  # Lista de bloques de queries
+        self.bloque_actual = [] # Buffer temporal para el bloque actual
+        self.tamano_bloque = 50 # Límite de inserts por bloque
+        
+        # DEFINICIÓN DE MAPEOS (Tabla -> Índices de HANA)
+        # Esto reemplaza el if/elif gigante. Es más limpio y fácil de editar.
+        self.mapeos = {
+            "OITM": lambda r: [r[0], r[1], r[2], r[3], r[4], r[5], r[6]],
+            "OWHS": lambda r: [r[0], r[1], r[2]],
+            "OWTR": lambda r: [r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10]],
+            "WTR1": lambda r: [r[0], r[1], r[2], r[3], r[4], r[5]],
+            "OITL": lambda r: [r[0], r[1], r[2], r[3], r[4], r[5], r[6]],
+            "ODLN": lambda r: [r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12]],
+            "OBTW": lambda r: [r[0], r[1], r[2], r[3], r[4]],
+            "ITL1": lambda r: [r[0], r[1], r[2], r[3], r[4]],
+            "IBT1": lambda r: [r[0], r[1], r[2], r[3], r[4], r[5], r[6]],
+            "DLN1": lambda r: [r[0], r[1], r[2], r[3], r[4], r[5], r[6]],
+            "INV1": lambda r: [r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8]],
+            # OBTN tiene lógica especial para la fecha, lo manejamos en una función aparte abajo si es necesario,
+            # pero aquí asumimos el mapeo directo y _formatear_valor hará el trabajo sucio.
+            "OBTN": lambda r: [r[0], r[1], r[2], r[3], r[4], r[5]], 
+            
+            # OINV: Mapeo específico según tu código anterior
+            # Indices: 0=DocEntry, 1=NumAtCard, 2=NGUIA, 3=ObjType, 4=DocNum, 5=CardCode, 
+            # 6=CardName, 7=DocDate, 8=TaxDate, 9=MDTD, 10=MDSD, 11=MDCD, 12=Lugar, 13=FecIniTra
+            "OINV": lambda r: [r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], r[13]]
+        }
 
-    def _agregar_insert(self, tabla, valores):
-        if self.contador >= self.limite:
-            print(f"🧱 Límite alcanzado ({self.limite}) en bloque {self.i} de {tabla}. Generando nuevo bloque...")
-            self.contador = 0
-            self.i += 1
-            self.query_sql.append("")
-
-        insert_stmt = f"\nINSERT INTO {tabla} VALUES(" + ",".join(valores) + ")"
-        self.query_sql[self.i] += insert_stmt
-        self.contador += 1
-
-    def _str(self, val):
+    def _formatear_valor(self, val):
+        """Limpia y formatea el valor para SQL Server."""
         if val is None or val == '' or str(val).lower() == 'none':
             return 'NULL'
-        return f"'{str(val)}'"
+        
+        # Manejo automático de fechas (datetime o date)
+        if isinstance(val, (datetime, date)):
+            return f"'{val.strftime('%Y-%m-%d %H:%M:%S')}'"
+        
+        # Convertir a string y escapar comillas simples
+        val_str = str(val).strip()
+        val_limpio = val_str.replace("'", "''") # Escapar comillas para SQL
+        return f"'{val_limpio}'"
+
+    def _agregar_insert(self, tabla, valores):
+        """Construye el string del INSERT y maneja los bloques."""
+        # Unimos los valores formateados con comas
+        valores_sql = ",".join([self._formatear_valor(v) for v in valores])
+        stmt = f"INSERT INTO dbo.{tabla} VALUES ({valores_sql});\n"
+        
+        self.bloque_actual.append(stmt)
+
+        # Si alcanzamos el límite, guardamos el bloque y limpiamos
+        if len(self.bloque_actual) >= self.tamano_bloque:
+            self.query_sql.append("".join(self.bloque_actual))
+            self.bloque_actual = []
 
     def query_transaccion(self, reg_hana, tabla):
-        print(f"📥 Recibido registro para tabla {tabla}: {reg_hana}")
+        """Método principal llamado desde el bucle de migración."""
         try:
-            if tabla == "OITM":
-                # OITM: ItemCode, ItemName, FrgnName, U_SYP_CONCENTRACION, U_SYP_FORPR, U_SYP_FFDET, U_SYP_FABRICANTE
-                self._agregar_insert(tabla, [
-                    self._str(reg_hana[0]),  # ItemCode
-                    self._str(reg_hana[1]),  # ItemName
-                    self._str(reg_hana[2]),  # FrgnName
-                    self._str(reg_hana[3]),  # U_SYP_CONCENTRACION
-                    self._str(reg_hana[4]),  # U_SYP_FORPR
-                    self._str(reg_hana[5]),  # U_SYP_FFDET
-                    self._str(reg_hana[6])   # U_SYP_FABRICANTE
-                ])
-            elif tabla == "OWHS":
-                # OWHS: WhsCode, WhsName, TaxOffice
-                self._agregar_insert(tabla, [
-                    self._str(reg_hana[0]),  # WhsCode
-                    self._str(reg_hana[1]),  # WhsName
-                    self._str(reg_hana[2])   # TaxOffice
-                ])
-            elif tabla == "OWTR":
-                # OWTR: DocEntry, DocNum, DocDate, Filler, ToWhsCode, U_SYP_MDTD, U_SYP_MDSD, U_SYP_MDCD, ObjType, CardName, U_BPP_FECINITRA
-                self._agregar_insert(tabla, [
-                    self._str(reg_hana[0]),  # DocEntry
-                    self._str(reg_hana[1]),  # DocNum
-                    self._str(reg_hana[2]),  # DocDate
-                    self._str(reg_hana[3]),  # Filler
-                    self._str(reg_hana[4]),  # ToWhsCode
-                    self._str(reg_hana[5]),  # U_SYP_MDTD
-                    self._str(reg_hana[6]),  # U_SYP_MDSD
-                    self._str(reg_hana[7]),  # U_SYP_MDCD
-                    self._str(reg_hana[8]),  # ObjType
-                    self._str(reg_hana[9]),  # CardName
-                    self._str(reg_hana[10])  # U_BPP_FECINITRA
-                ])
-            elif tabla == "WTR1":
-                # WTR1: DocEntry, LineNum, ItemCode, Dscription, WhsCode, ObjType
-                self._agregar_insert(tabla, [
-                    self._str(reg_hana[0]),  # DocEntry
-                    self._str(reg_hana[1]),  # LineNum
-                    self._str(reg_hana[2]),  # ItemCode
-                    self._str(reg_hana[3]),  # Dscription
-                    self._str(reg_hana[4]),  # WhsCode
-                    self._str(reg_hana[5])   # ObjType
-                ])
-            elif tabla == "OITL":
-                # OITL: LogEntry, ItemCode, DocEntry, DocLine, DocType, StockEff, LocCode
-                self._agregar_insert(tabla, [
-                    self._str(reg_hana[0]),  # LogEntry
-                    self._str(reg_hana[1]),  # ItemCode
-                    self._str(reg_hana[2]),  # DocEntry
-                    self._str(reg_hana[3]),  # DocLine
-                    self._str(reg_hana[4]),  # DocType
-                    self._str(reg_hana[5]),  # StockEff
-                    self._str(reg_hana[6])   # LocCode
-                ])
-            elif tabla == "ODLN":
-                # ODLN: DocEntry, ObjType, DocNum, CardCode, CardName, NumAtCard, DocDate, TaxDate, U_SYP_MDTD, U_SYP_MDSD, U_SYP_MDCD, U_COB_LUGAREN, U_BPP_FECINITRA
-                self._agregar_insert(tabla, [
-                    self._str(reg_hana[0]),  # DocEntry
-                    self._str(reg_hana[1]),  # ObjType
-                    self._str(reg_hana[2]),  # DocNum
-                    self._str(reg_hana[3]),  # CardCode
-                    self._str(reg_hana[4]),  # CardName
-                    self._str(reg_hana[5]),  # NumAtCard
-                    self._str(reg_hana[6]),  # DocDate
-                    self._str(reg_hana[7]),  # TaxDate
-                    self._str(reg_hana[8]),  # U_SYP_MDTD
-                    self._str(reg_hana[9]),  # U_SYP_MDSD
-                    self._str(reg_hana[10]), # U_SYP_MDCD
-                    self._str(reg_hana[11]), # U_COB_LUGAREN
-                    self._str(reg_hana[12])  # U_BPP_FECINITRA
-                ])
-            elif tabla == "OINV":
-                # OINV: DocEntry, NumAtCard, U_SYP_NGUIA, ObjType, DocNum, CardCode, CardName, DocDate, TaxDate, U_SYP_MDTD, U_SYP_MDSD, U_SYP_MDCD, U_COB_LUGAREN, U_BPP_FECINITRA
-                print(f"[DEBUG OINV] Datos recibidos: {reg_hana}")
-                valores = [
-                    self._str(reg_hana[0]),  # DocEntry
-                    self._str(reg_hana[1]),  # NumAtCard
-                    self._str(reg_hana[2]),  # U_SYP_NGUIA
-                    self._str(reg_hana[3]),  # ObjType
-                    self._str(reg_hana[4]),  # DocNum
-                    self._str(reg_hana[5]),  # CardCode
-                    self._str(reg_hana[6]),  # CardName
-                    self._str(reg_hana[7]),  # DocDate
-                    self._str(reg_hana[8]),  # TaxDate
-                    self._str(reg_hana[9]),  # U_SYP_MDTD
-                    self._str(reg_hana[10]), # U_SYP_MDSD
-                    self._str(reg_hana[11]), # U_SYP_MDCD
-                    self._str(reg_hana[12]), # U_COB_LUGAREN
-                    self._str(reg_hana[13])  # U_BPP_FECINITRA
-                ]
-                insert_stmt = f"\nINSERT INTO {tabla} VALUES(" + ",".join(valores) + ")"
-                print(f"[DEBUG OINV] SQL generado: {insert_stmt}")
-                self._agregar_insert(tabla, valores)
-            elif tabla == "OBTW":
-                # OBTW: ItemCode, MdAbsEntry, WhsCode, Location, AbsEntry
-                self._agregar_insert(tabla, [
-                    self._str(reg_hana[0]),  # ItemCode
-                    self._str(reg_hana[1]),  # MdAbsEntry
-                    self._str(reg_hana[2]),  # WhsCode
-                    self._str(reg_hana[3]),  # Location
-                    self._str(reg_hana[4])   # AbsEntry
-                ])
-            elif tabla == "OBTN":
-                # OBTN: ItemCode, DistNumber, SysNumber, AbsEntry, MnfSerial, ExpDate
-                try:
-                    fecha = datetime.strptime(reg_hana[5], "%Y-%m-%d %H:%M:%S")
-                    fecha_formateada = fecha.strftime("%Y-%m-%d %H:%M:%S")
-                except Exception:
-                    fecha_formateada = ""
-                self._agregar_insert(tabla, [
-                    self._str(reg_hana[0]),  # ItemCode
-                    self._str(reg_hana[1]),  # DistNumber
-                    self._str(reg_hana[2]),  # SysNumber
-                    self._str(reg_hana[3]),  # AbsEntry
-                    self._str(reg_hana[4]),  # MnfSerial
-                    self._str(fecha_formateada) # ExpDate
-                ])
-            elif tabla == "ITL1":
-                # ITL1: LogEntry, ItemCode, Quantity, SysNumber, MdAbsEntry
-                self._agregar_insert(tabla, [
-                    self._str(reg_hana[0]),  # LogEntry
-                    self._str(reg_hana[1]),  # ItemCode
-                    self._str(reg_hana[2]),  # Quantity
-                    self._str(reg_hana[3]),  # SysNumber
-                    self._str(reg_hana[4])   # MdAbsEntry
-                ])
-            elif tabla == "IBT1":
-                # IBT1: ItemCode, BatchNum, WhsCode, BaseEntry, BaseType, BaseLinNum, Quantity
-                self._agregar_insert(tabla, [
-                    self._str(reg_hana[0]),  # ItemCode
-                    self._str(reg_hana[1]),  # BatchNum
-                    self._str(reg_hana[2]),  # WhsCode
-                    self._str(reg_hana[3]),  # BaseEntry
-                    self._str(reg_hana[4]),  # BaseType
-                    self._str(reg_hana[5]),  # BaseLinNum
-                    self._str(reg_hana[6])   # Quantity
-                ])
-            elif tabla == "DLN1":
-                # DLN1: DocEntry, ObjType, WhsCode, ItemCode, LineNum, Dscription, UomCode
-                self._agregar_insert(tabla, [
-                    self._str(reg_hana[0]),  # DocEntry
-                    self._str(reg_hana[1]),  # ObjType
-                    self._str(reg_hana[2]),  # WhsCode
-                    self._str(reg_hana[3]),  # ItemCode
-                    self._str(reg_hana[4]),  # LineNum
-                    self._str(reg_hana[5]),  # Dscription
-                    self._str(reg_hana[6])   # UomCode
-                ])
-            elif tabla == "INV1":
-                # INV1: DocEntry, ObjType, WhsCode, ItemCode, LineNum, Dscription, UomCode, BaseType, BaseEntry
-                self._agregar_insert(tabla, [
-                    self._str(reg_hana[0]),  # DocEntry
-                    self._str(reg_hana[1]),  # ObjType
-                    self._str(reg_hana[2]),  # WhsCode
-                    self._str(reg_hana[3]),  # ItemCode
-                    self._str(reg_hana[4]),  # LineNum
-                    self._str(reg_hana[5]),  # Dscription
-                    self._str(reg_hana[6]),  # UomCode
-                    self._str(reg_hana[7]),  # BaseType
-                    self._str(reg_hana[8])   # BaseEntry
-                ])
+            if tabla not in self.mapeos:
+                logger.error(f"❌ Tabla {tabla} no definida en los mapeos del Importador.")
+                return
+
+            # Extraer valores usando la lambda definida en __init__
+            valores_crudos = self.mapeos[tabla](reg_hana)
+            
+            # Caso especial OBTN (Validación extra de fecha expiración si viene corrupta)
+            if tabla == "OBTN":
+                # El índice 5 es ExpDate
+                fecha_exp = valores_crudos[5]
+                if isinstance(fecha_exp, str):
+                    try:
+                        # Intentar parsear si viene como string extraño
+                        valores_crudos[5] = datetime.strptime(fecha_exp, "%Y-%m-%d %H:%M:%S")
+                    except ValueError:
+                        valores_crudos[5] = None # Si falla, NULL
+
+            self._agregar_insert(tabla, valores_crudos)
 
         except IndexError as e:
-            print(f"ERROR en {tabla}: indice fuera de rango en reg_hana - {e}")
+            logger.error(f"❌ Error de índice en {tabla}. Registro tiene {len(reg_hana)} campos, se esperaban más. Detalle: {e}")
         except Exception as e:
-            print(f"ERROR inesperado en {tabla}: {e}")
+            logger.error(f"❌ Error procesando registro de {tabla}: {e}")
+
+    def obtener_query_final(self):
+        """Devuelve todos los bloques restantes."""
+        if self.bloque_actual:
+            self.query_sql.append("".join(self.bloque_actual))
+            self.bloque_actual = []
+        return self.query_sql
+
+    # Compatibilidad con tu código existente que llama a .query_sql directamente
+    @property
+    def sql_generated(self):
+        # Asegura que lo que quede en el buffer se pase a la lista final
+        if self.bloque_actual:
+            self.query_sql.append("".join(self.bloque_actual))
+            self.bloque_actual = []
+        return self.query_sql

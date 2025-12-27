@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 class PDFOrganolepticoRequest(BaseModel):
     fecha: date
     firma: str
+    almacen_id: str
 
 
 # --- FUNCION UTILITARIA PARA NOMBRE FIRMA ---
@@ -84,9 +85,10 @@ def generar_pdf_organoleptico(data: PDFOrganolepticoRequest, background_tasks: B
         # 2. LOGICA SQL
         with ConexionSQL() as conn:
             cursor = conn.cursor
-            sp_listado = "{CALL LISTADO_DOC_ORGA_TS (?)}"
-            logger.info(f"Ejecutando SP: {sp_listado} con fecha {fecha_str_log}")
-            cursor.execute(sp_listado, fecha_str_log)
+            sp_listado = "{CALL LISTADO_DOC_ORGA_TS (?, ?)}"
+            logger.info(f"Ejecutando SP: {sp_listado} con {fecha_str_log} y {data.almacen_id}")
+
+            cursor.execute(sp_listado, (fecha_str_log, data.almacen_id))
             rows = cursor.fetchall()
             docentries = [row[0] for row in rows]
             logger.info(f"DocEntries encontrados: {docentries}")

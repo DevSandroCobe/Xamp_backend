@@ -33,37 +33,71 @@
       text-transform: uppercase;
       font-family: 'Calibri', 'Arial', sans-serif;
     }
+    /* Esto anula tu regla global de width: 100% solo para este ID */
+    #tabla-codigo-cabecera {
+      width: 1px !important;    /* Forzamos el mínimo para que no se estire */
+      white-space: nowrap;      /* El contenido definirá el ancho real */
+      float: right !important;  /* Pegado al costado derecho */
+      border-collapse: collapse;
+    }
+    #tabla-codigo-cabecera td {
+      border: 1px solid #000 !important;
+      font-size: 11px;
+      padding: 2px 6px;
+      font-weight: bold;
+    }
+    #tabla-aviso {
+      width: 50%;           /* Ocupa la mitad del ancho */
+      margin: auto;         /* Esto lo centra horizontalmente */
+      margin-top: 16px;     /* Espacio por arriba */
+      border-collapse: collapse;
+    }
+
+    #tabla-aviso td {
+      border: 1px solid #000; /* El borde negro del recuadro */
+      font-size: 11px;        /* Tamaño de letra legible */
+      text-align: center;     /* Texto centrado */
+      padding: 5px;           /* Un poco de aire dentro del cuadro */
+      color: #000;
+    }
   </style>
 </head>
 <body>
 
   <!-- ENCABEZADO -->
-  <table class="sin-borde">
+   <table style="width: 100%; border: none;">
     <tr>
-      <td colspan="3" style="vertical-align: middle;">
-        <img src="logo.jpg" style="width: 120px; height: 50px; display: block; margin: 0;" />
+      <td style="text-align: left; vertical-align: top;">
+        <img src="logo.jpg" style="width: 120px; height: auto;">
       </td>
-      <td colspan="2" align="right" style="vertical-align: middle;">
-        <table style="border-collapse: collapse; font-size: 12px; display: inline-table;">
+      <td style="text-align: right; vertical-align: top;">
+        <table id="tabla-codigo-cabecera" align="right">
           <tr>
-            <td style="border: 1px solid; width: 60px; padding: 2px 6px;"><strong>F/ALM‑002</strong></td>
-            <td style="border: 1px solid; width: 30px; padding: 2px 6px;"><strong>V1</strong></td>
+            <td>F/ALM‑002</td>
+            <td>V1</td>
           </tr>
         </table>
       </td>
     </tr>
+  </table>
+
+  <table style="width: 100%; border: none; margin: 10px 0;">
     <tr>
-      <td colspan="6" align="center" class="titulo">ACTA DE DESPACHO DE PRODUCTOS – COBEFAR S.A.C.</td>
+      <td class="titulo" style="text-align: center;">ACTA DE DESPACHO DE PRODUCTOS – COBEFAR S.A.C.</td>
+    </tr>
+  </table>
+
+  <table style="width: 100%; border: none;">
+    <tr>
+      <td style="width: 1%; white-space: nowrap; text-align: left; font-size: 12px; font-weight: bold;">FECHA :</td>
+      <td style="text-align: left; font-size: 12px; padding-left: 10px;">{{ docdate }}</td>
+      
+      <td style="text-align: right; font-size: 12px; font-weight: bold;">FACTURA/BOLETA N° :</td>
+      <td style="width: 1%; white-space: nowrap; text-align: right; font-size: 12px; padding-left: 10px;">{{ factura }}</td>
     </tr>
     <tr>
-      <td style="text-align:left; font-size:12px;"><strong>FECHA :</strong></td>
-      <td style="text-align:left; font-size:12px;">{{ docdate }}</td>
-      <td colspan="2" align="right" style="font-size:12px;"><strong>FACTURA/BOLETA N° :</strong></td>
-      <td style="text-align:left; font-size:12px;">{{ factura }}</td>
-    </tr>
-    <tr>
-      <td style="text-align:left; font-size:12px;"><strong>CLIENTE :</strong></td>
-      <td colspan="4" style="text-align:left; font-size:12px;">{{ cliente }}</td>
+      <td style="white-space: nowrap; text-align: left; font-size: 12px; font-weight: bold;">CLIENTE :</td>
+      <td colspan="3" style="text-align: left; font-size: 12px; padding-left: 10px;">{{ cliente }}</td>
     </tr>
   </table>
 
@@ -145,24 +179,40 @@
       <td colspan="20" style="text-align:left;"><strong>OBSERVACIONES:</strong> NINGUNA</td>
     </tr>
     <tr>
-      <td colspan="20" align="center">
-        <img src="Firmas/{{ firma }}" style="width: 150px; display: block; margin: auto;" />
+      <td colspan="20">
+        <table style="width: 100%; border: none; border-spacing: 0;">
+          <tr>
+            <td style="width: 48%; text-align: center; vertical-align: bottom;">
+              <div style="height: 90px; line-height: 90px; text-align: center; overflow: hidden;">
+                <img src="Firmas/{{ firma_encargado }}" 
+                    style="max-height: 85px; max-width: 180px; vertical-align: middle; display: inline-block;">
+              </div>
+              <div style="width: 220px; margin: 0 auto; border-top: 1px solid #000; padding-top: 5px;">
+                <div style="font-size: 10px; font-weight: bold;">ENTREGADO POR:</div>
+                <div style="font-size: 8px;">(sello y firma)</div>
+              </div>
+            </td>
+
+            <td style="width: 4%;"></td>
+
+            <td style="width: 48%; text-align: center; vertical-align: bottom;">
+              <div style="height: 90px;"></div>
+              
+              <div style="width: 220px; margin: 0 auto; border-top: 1px solid #000; padding-top: 5px;">
+                <div style="font-size: 10px; font-weight: bold;">RECIBIDO POR:</div>
+                <div style="font-size: 8px;">(Sello y Firma)</div>
+              </div>
+            </td>
+          </tr>
+        </table>
       </td>
     </tr>
-    <tr>
-      <td colspan="20" align="center">-------------------------------------------------</td>
-    </tr>
-    <tr>
-      <td colspan="20" align="center">RESPONSABLE DE ALMACÉN</td>
-    </tr>
-    <tr>
-      <td colspan="20" align="center">(sello y firma)</td>
-    </tr>
+    
     <tr>
       <td colspan="20" style="padding:0; border:none;">
-        <table width="50%" style="margin: auto; padding-top: 16px; font-size: 7px; border-collapse: collapse;">
+        <table id="tabla-aviso">
           <tr>
-            <td style="color: black; border: solid 1px; border-color: black; font-size: 11px; text-align: center;">
+            <td>
               Prohibido reproducir sin autorización de DROGUERÍA COBEFAR
             </td>
           </tr>

@@ -95,10 +95,10 @@ class Migrador:
             ''',
         
             'OINV': f'''
-                SELECT T0."DocEntry",T0."ObjType",T0."DocNum",T0."CardCode",T0."CardName",T0."NumAtCard",T0."DocDate",
-                    T0."TaxDate",T0."U_SYP_MDTD",T0."U_SYP_MDSD",T0."U_SYP_MDCD",T0."U_COB_LUGAREN",T0."U_BPP_FECINITRA"
-                FROM {self._esquema("OINV")}.OINV T0
-                WHERE T0."CANCELED" = 'N'
+                 SELECT T0."DocEntry", T0."NumAtCard", T0."U_SYP_NGUIA", T0."ObjType", T0."DocNum", T0."CardCode", T0."CardName", T0."DocDate",
+                T0."TaxDate", T0."U_SYP_MDTD", T0."U_SYP_MDSD", T0."U_SYP_MDCD", T0."U_COB_LUGAREN", T0."U_BPP_FECINITRA"
+            FROM {self._esquema("OINV")}.OINV T0
+            WHERE T0."CANCELED" = 'N'
                 AND T0."DocDate" BETWEEN '{inicio_fmt}' AND '{fin_fmt}' 
             ''',
             
